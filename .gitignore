@@ -6,3 +6,4 @@ build/
 dist/
 *.spec
 selftest.log
+CLAUDE.local.md
