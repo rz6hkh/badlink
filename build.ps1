@@ -20,7 +20,7 @@ $out = 'dist\BadLink'
 Copy-Item -Recurse windivert, iperf3 $out
 Copy-Item README.md, THIRD_PARTY.md $out
 New-Item -ItemType Directory -Force "$out\docs" | Out-Null
-Copy-Item docs\screenshot.png "$out\docs"
+Copy-Item docs\*.png "$out\docs"
 
 # самопроверка собранного exe (без прав администратора и без перехвата)
 $p = Start-Process "$out\BadLink.exe" -ArgumentList '--selftest' -Wait -PassThru
