@@ -7,3 +7,4 @@ dist/
 *.spec
 selftest.log
 CLAUDE.local.md
+photo_*.jpg

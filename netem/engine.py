@@ -2,7 +2,10 @@
 
 Для каждого направления (приём / отдача) пакет проходит:
     прерывание? -> очередь узкого места (drop-tail) -> ограничитель скорости (token bucket) -> отправка
-Скорость ограничителя раз в ~интервал случайно выбирается из [база - разброс, база + разброс].
+Скорость ограничителя раз в ~интервал выбирается случайно:
+  как реальный канал — логнормально со средним = база и СКО = разброс (часто ниже среднего,
+                        изредка всплески в разы выше — так выглядят замеры iperf на реальных каналах);
+  равномерно          — из [база - разброс, база + разброс].
 Прерывания: оба направления сразу падают в 0 на случайное время.
   обрыв     — всё, что пришло во время прерывания, и содержимое очереди теряется;
   замирание — пакеты копятся (очередь растягивается на длительность прерывания) и уходят после.
@@ -12,6 +15,7 @@
 последовательность скоростей и расписание прерываний повторяются независимо от трафика.
 """
 import collections
+import math
 import random
 import threading
 import time
@@ -29,6 +33,7 @@ class Params:
     up_swing_kbps: float = 500.0
     step_ms: float = 1000.0         # как часто меняется скорость (±40% случайно)
     smooth: bool = False            # плавный переход вместо ступеньки
+    realistic: bool = True          # True — логнормально (как реальный канал), False — равномерно ± разброс
     queue_ms: float = 100.0         # очередь узкого места, мс трафика на базовой скорости
     outage_enabled: bool = False
     outage_per_min: float = 2.0
@@ -55,7 +60,18 @@ class _Dir:
         self.drop_queue = self.drop_outage = 0
         self.send_err = 0
 
-    def update_rate(self, now, base, swing, step_s, smooth):
+    def _draw(self, base, swing, realistic):
+        floor = 8.0
+        if swing <= 0:
+            return base
+        if realistic:
+            # логнормальное с заданными средним и СКО; всплески не выше 3,5× средней (в реальных замерах — до ~3×)
+            s2 = math.log(1 + (swing / base) ** 2)
+            mu = math.log(base) - s2 / 2
+            return min(base * 3.5, max(floor, self.rng.lognormvariate(mu, math.sqrt(s2))))
+        return self.rng.uniform(max(floor, base - swing), base + swing)
+
+    def update_rate(self, now, base, swing, step_s, smooth, realistic=False):
         if base <= 0:
             self.cur_kbps = None
             self.base_seen = None
@@ -66,9 +82,7 @@ class _Dir:
             self.seg_end = now
         if now >= self.seg_end:
             self.prev_kbps = self.cur_kbps if self.cur_kbps is not None else base
-            lo = max(8.0, base - swing) if swing > 0 else base
-            hi = base + swing if swing > 0 else base
-            self.target_kbps = self.rng.uniform(lo, hi)
+            self.target_kbps = self._draw(base, swing, realistic)
             self.seg_start = now
             self.seg_end = now + max(0.05, step_s * self.rng.uniform(0.6, 1.4))
         if smooth:
@@ -190,8 +204,8 @@ class Engine:
                 p = self.params
                 self._update_outage(now, p)
                 step = max(0.05, p.step_ms / 1000.0)
-                self.dirs[DOWN].update_rate(now, p.down_kbps, p.down_swing_kbps, step, p.smooth)
-                self.dirs[UP].update_rate(now, p.up_kbps, p.up_swing_kbps, step, p.smooth)
+                self.dirs[DOWN].update_rate(now, p.down_kbps, p.down_swing_kbps, step, p.smooth, p.realistic)
+                self.dirs[UP].update_rate(now, p.up_kbps, p.up_swing_kbps, step, p.smooth, p.realistic)
                 inbox = self._inbox
                 while inbox:
                     _, pkt, addr, out = inbox.popleft()
@@ -218,7 +232,8 @@ class Engine:
                 self._next_outage = now + self._orng.expovariate(1.0 / mean_gap)
             if now >= self._next_outage and now >= self._outage_end:
                 lo, hi = sorted((max(0.1, p.outage_min_s), max(0.1, p.outage_max_s)))
-                self._outage_end = now + self._orng.uniform(lo, hi)
+                # равномерно по логарифму: короткие прерывания частые, длинные редкие (как в реальных замерах)
+                self._outage_end = now + math.exp(self._orng.uniform(math.log(lo), math.log(hi)))
                 self._next_outage = self._outage_end + self._orng.expovariate(1.0 / mean_gap)
         else:
             self._next_outage = None

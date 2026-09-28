@@ -26,10 +26,25 @@ C_OFFER = "#6b6f76"
 C_PING = "#5ad17a"
 C_IPERF = "#ff9f43"
 
+# Стандартные настройки канала для каждого режима (кнопка «Сбросить к стандартным»).
+# «real» подогнан по реальным замерам iperf3 -R на объекте: итог ~2 Мбит/с, секунды от 0 до ~7 Мбит/с,
+# одиночные нули и изредка серии по 4–5, 2–3 прерывания в минуту, всплеск после прерывания.
+MODE_DEFAULTS = {
+    "real": dict(down_rate="2,7", down_swing="3000", up_same=True, up_rate="2,7", up_swing="3000",
+                 step_ms="800", smooth=False, queue_ms="100",
+                 out_en=True, out_per_min="3", out_min="0,5", out_max="6", out_mode="hold"),
+    "uniform": dict(down_rate="1,5", down_swing="500", up_same=True, up_rate="1,5", up_swing="500",
+                    step_ms="1000", smooth=False, queue_ms="100",
+                    out_en=False, out_per_min="2", out_min="1", out_max="5", out_mode="drop"),
+}
+MODE_HINTS = {
+    "real": "Разброс — типичное отклонение: чаще ниже средней, изредка всплески до 3,5×. "
+            "iperf покажет примерно на четверть меньше средней: стандартные 2,7 Мбит/с дают в iperf ≈ 2 Мбит/с.",
+    "uniform": "Скорость равномерно гуляет в пределах средняя ± разброс.",
+}
+
 DEFAULTS = dict(
-    down_rate="1,5", down_swing="500", up_rate="1,5", up_swing="500", up_same=True,
-    step_ms="1000", smooth=False, queue_ms="100",
-    out_en=False, out_per_min="2", out_min="1", out_max="5", out_mode="drop", manual_s="3",
+    mode="real", **MODE_DEFAULTS["real"], manual_s="3",
     seed="", peer="", ping_on=True,
     ip_time="90", ip_rev=True, ip_udp=False, ip_bitrate="", ip_len="8K", ip_parallel="1", ip_port="5201",
     srv_auto=True, csv_on=False, iface="",
@@ -188,23 +203,32 @@ class App(tk.Tk):
         tab = ttk.Frame(nb, padding=8)
         nb.add(tab, text="Канал")
 
-        g = ttk.LabelFrame(tab, text=" Приём (к этому ПК) ", padding=6)
+        g = ttk.LabelFrame(tab, text=" Как меняется скорость ", padding=6)
         g.pack(fill="x")
-        self._row(g, "Базовая скорость", self._num_entry(g, "down_rate"), "Мбит/с")
-        self._row(g, "Разброс ±", self._num_entry(g, "down_swing"), "кбит/с")
+        self._var("mode")
+        ttk.Radiobutton(g, text="Как реальный канал (провалы и всплески)", value="real",
+                        variable=self.v["mode"], command=self._sync_mode_hint).pack(anchor="w")
+        ttk.Radiobutton(g, text="Равномерно: средняя ± разброс", value="uniform",
+                        variable=self.v["mode"], command=self._sync_mode_hint).pack(anchor="w")
+        self.mode_hint = ttk.Label(g, text="", foreground="#666", wraplength=340, justify="left")
+        self.mode_hint.pack(anchor="w", pady=(2, 4))
+        self._row(g, "Смена скорости каждые", self._num_entry(g, "step_ms"), "мс (±40%)")
+        ttk.Checkbutton(g, text="Плавный переход (иначе ступенькой)", variable=self._var("smooth")).pack(anchor="w")
+        ttk.Button(g, text="Сбросить к стандартным для режима",
+                   command=self._reset_mode_defaults).pack(anchor="w", pady=(4, 0))
+
+        g = ttk.LabelFrame(tab, text=" Приём (к этому ПК) ", padding=6)
+        g.pack(fill="x", pady=(8, 0))
+        self._row(g, "Средняя скорость", self._num_entry(g, "down_rate"), "Мбит/с")
+        self._row(g, "Разброс", self._num_entry(g, "down_swing"), "кбит/с")
 
         g = ttk.LabelFrame(tab, text=" Отдача (от этого ПК) ", padding=6)
         g.pack(fill="x", pady=(8, 0))
         ttk.Checkbutton(g, text="Как приём", variable=self._var("up_same"),
                         command=self._sync_up_state).pack(anchor="w")
-        self._row(g, "Базовая скорость", self._num_entry(g, "up_rate"), "Мбит/с")
-        self._row(g, "Разброс ±", self._num_entry(g, "up_swing"), "кбит/с")
+        self._row(g, "Средняя скорость", self._num_entry(g, "up_rate"), "Мбит/с")
+        self._row(g, "Разброс", self._num_entry(g, "up_swing"), "кбит/с")
         ttk.Label(tab, text="0 = без ограничения в этом направлении", foreground="#888").pack(anchor="w")
-
-        g = ttk.LabelFrame(tab, text=" Качание ", padding=6)
-        g.pack(fill="x", pady=(8, 0))
-        self._row(g, "Смена скорости каждые", self._num_entry(g, "step_ms"), "мс (±40%)")
-        ttk.Checkbutton(g, text="Плавный переход (иначе ступенькой)", variable=self._var("smooth")).pack(anchor="w")
 
         g = ttk.LabelFrame(tab, text=" Прерывания (0 в обе стороны) ", padding=6)
         g.pack(fill="x", pady=(8, 0))
@@ -228,6 +252,7 @@ class App(tk.Tk):
         ttk.Checkbutton(g, text="Писать статистику в CSV (папка logs)", variable=self._var("csv_on"),
                         command=self._csv_toggle).pack(anchor="w", pady=(4, 0))
         self._sync_up_state()
+        self._sync_mode_hint()
 
     def _build_test_tab(self, nb):
         tab = ttk.Frame(nb, padding=8)
@@ -357,6 +382,18 @@ class App(tk.Tk):
         for n in ("up_rate", "up_swing"):
             self._entries[n].configure(state="disabled" if same else "normal")
 
+    def _sync_mode_hint(self):
+        self.mode_hint.configure(text=MODE_HINTS.get(self.v["mode"].get(), ""))
+
+    def _reset_mode_defaults(self):
+        """Стандартные настройки канала для выбранного режима. Seed, интерфейс и тестовые поля не трогаем."""
+        mode = self.v["mode"].get()
+        for name, val in MODE_DEFAULTS[mode].items():
+            self.v[name].set(val)
+        self._sync_up_state()
+        title = "реальный канал" if mode == "real" else "равномерно"
+        self.log(f"Настройки канала сброшены к стандартным для режима «{title}»")
+
     def _validate(self):
         """Проверка полей; неверные подсвечиваются. Возвращает Params или None."""
         checks = dict(down_rate=(0, 1000), down_swing=(0, 1e6), up_rate=(0, 1000), up_swing=(0, 1e6),
@@ -384,6 +421,7 @@ class App(tk.Tk):
             down_kbps=vals["down_rate"] * 1000, down_swing_kbps=vals["down_swing"],
             up_kbps=up_rate * 1000, up_swing_kbps=up_swing,
             step_ms=vals["step_ms"], smooth=self.v["smooth"].get(), queue_ms=vals["queue_ms"],
+            realistic=self.v["mode"].get() != "uniform",
             outage_enabled=self.v["out_en"].get(), outage_per_min=vals["out_per_min"],
             outage_min_s=vals["out_min"], outage_max_s=vals["out_max"],
             outage_hold=self.v["out_mode"].get() == "hold")

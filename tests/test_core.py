@@ -85,11 +85,26 @@ class EngineTest(unittest.TestCase):
         _, io, _, t0 = self.run_engine(Params(down_kbps=3000, up_kbps=500, up_swing_kbps=0), 4, 3000, outbound=True)
         self.assertAlmostEqual(measured_kbps(io, t0 + 1), 500, delta=60)
 
-    def test_swing_stays_in_corridor(self):
-        e, io, _, _ = self.run_engine(Params(down_kbps=1500, down_swing_kbps=500, step_ms=200), 3, 4000)
+    def test_uniform_stays_in_corridor(self):
+        e, io, _, _ = self.run_engine(Params(down_kbps=1500, down_swing_kbps=500, step_ms=200, realistic=False),
+                                      3, 4000)
         d = e.dirs[DOWN]
         self.assertGreaterEqual(d.target_kbps, 1000)
         self.assertLessEqual(d.target_kbps, 2000)
+
+    def test_realistic_distribution(self):
+        """Режим «как реальный канал»: среднее ≈ база, СКО ≈ разброс, медиана ниже среднего, потолок 3,5×."""
+        import random
+        import statistics as st
+        from netem.engine import _Dir
+
+        d = _Dir(DOWN, random.Random(5))
+        xs = [d._draw(2700, 3000, True) for _ in range(20000)]
+        self.assertTrue(2700 * 0.88 <= st.mean(xs) <= 2700, st.mean(xs))   # потолок 3,5× срезает среднее на ~6%
+        self.assertLess(st.median(xs), st.mean(xs) * 0.8)
+        self.assertLessEqual(max(xs), 2700 * 3.5)
+        self.assertGreaterEqual(min(xs), 8.0)
+        self.assertGreater(st.pstdev(xs), 1800)
 
     def test_unlimited_passes_everything(self):
         _, io, snap, _ = self.run_engine(Params(down_kbps=0, up_kbps=0), 1.5, 2000)
