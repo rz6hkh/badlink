@@ -72,6 +72,10 @@ def run():
     lines.append("SELFTEST " + ("PASSED" if ok else "FAILED"))
     text = "\n".join(lines)
     if sys.stdout:
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")   # консоль CI может быть в cp1252
+        except (AttributeError, ValueError):
+            pass
         print(text)
     base = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.getcwd()
     try:
