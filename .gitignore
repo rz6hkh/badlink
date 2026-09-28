@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+settings.json
+logs/
+build/
+dist/
+*.spec
+selftest.log
