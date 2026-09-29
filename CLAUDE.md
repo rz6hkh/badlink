@@ -49,3 +49,6 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 - Консоль CI-раннера в cp1252: любой вывод с кириллицей в stdout — через `sys.stdout.reconfigure(encoding="utf-8")`.
 - Windows-iperf3 с блоком по умолчанию (128K) на низких скоростях показывает ложные ступеньки 1,05/2,1/0 Мбит/с —
   в тестах всегда `-l 8K`.
+- **Поддерживается Windows 7** (отдельный архив `-win7`, собирается на Python 3.8): код совместим с Python 3.8
+  (без `list[...]`-аннотаций, `removeprefix`, `match`, `zip(strict=)` и т.п.), системные вызовы — не новее Windows 7
+  (никаких PowerShell `Get-Net*`/`ConvertTo-Json` — на Win7 их нет; интерфейсы — через `GetAdaptersAddresses`).

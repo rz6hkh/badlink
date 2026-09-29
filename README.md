@@ -22,10 +22,21 @@
 
 ## Установка и запуск
 
-1. Скачайте `BadLink-<версия>.zip` со страницы [Releases](https://github.com/rz6hkh/badlink/releases)
-   (свежая сборка с `main` — в артефактах последнего запуска [Actions](https://github.com/rz6hkh/badlink/actions)).
+1. Скачайте архив со страницы [Releases](https://github.com/rz6hkh/badlink/releases)
+   (свежая сборка с `main` — в артефактах последнего запуска [Actions](https://github.com/rz6hkh/badlink/actions)):
+
+   | Windows | архив |
+   |---|---|
+   | 8.1, 10, 11, Server 2012 R2 и новее | `BadLink-<версия>.zip` |
+   | 7 SP1, Server 2008 R2 | `BadLink-<версия>-win7.zip` |
+
 2. Распакуйте в любую папку. Python не нужен: драйвер WinDivert и iperf3 лежат рядом с exe.
 3. Запустите `BadLink.exe`. Он сам запросит права администратора (без них перехват невозможен).
+
+Обычный архив на Windows 7 не запустится (ошибки «отсутствует api-ms-win-core-path-l1-1-0.dll» и
+«Failed to load Python DLL python312.dll») — для неё отдельная сборка на Python 3.8. Windows 7 должна быть
+с обновлениями: **KB2999226** (Universal C Runtime, нужен Python) и **KB4474419** (подписи SHA-2 — без него
+Windows 7 не загрузит драйвер WinDivert). На машине, обновлявшейся через Windows Update до 2020 года, они уже есть.
 
 Настройки сохраняются в `settings.json` рядом с exe, CSV-логи — в `logs\`. Папку можно копировать
 между машинами стенда вместе с настройками.
@@ -102,10 +113,12 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 ```
 
 `build.ps1` (нужен `pip install pyinstaller`) собирает `dist\BadLink\BadLink.exe`, прогоняет на нём `--selftest`
-и упаковывает `dist\BadLink-<версия>.zip`.
+и упаковывает `dist\BadLink-<версия>.zip`. `build.ps1 -Win7` под Python 3.8 собирает `BadLink-<версия>-win7.zip`
+с iperf3 из `iperf3-win7\` (Cygwin 3.4 — последний с поддержкой Windows 7). Код должен оставаться совместимым
+с Python 3.8: CI гоняет тесты на 3.12 и 3.8.
 
-**CI (GitHub Actions):** на каждый push и PR — ruff, тесты, самопроверка, сборка exe (архив в артефактах запуска).
-На тег `vX.Y.Z` — дополнительно GitHub Release с архивом. Тег должен совпадать с `__version__` в `netem/__init__.py`.
+**CI (GitHub Actions):** на каждый push и PR — ruff, тесты и самопроверка на Python 3.12 и 3.8, сборка обоих
+архивов (в артефактах запуска). На тег `vX.Y.Z` — дополнительно GitHub Release с двумя архивами. Тег должен совпадать с `__version__` в `netem/__init__.py`.
 
 Переменная окружения `BADLINK_EXTRA_FILTER` сужает перехват (только для отладки), например
 `set BADLINK_EXTRA_FILTER=ip.DstAddr == 10.0.0.5 or ip.SrcAddr == 10.0.0.5`.
@@ -121,6 +134,7 @@ netem/gui.py           окно
 netem/selftest.py      самопроверка для CI и собранного exe
 windivert/             WinDivert 2.2.2 (x64): WinDivert.dll, WinDivert64.sys, LICENSE (LGPLv3)
 iperf3/                iperf3 3.21 для Windows (сборка ar51an/iperf3-win-builds, BSD) + cygwin1.dll (LGPLv3)
+iperf3-win7/           то же для Windows 7 (Cygwin 3.4.10) — кладётся в архив -win7 вместо iperf3/
 ```
 
 ## Лицензия

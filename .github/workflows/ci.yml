@@ -9,15 +9,21 @@ on:
 
 jobs:
   test:
-    name: Линтер, тесты, самопроверка
+    name: Линтер, тесты, самопроверка (Python ${{ matrix.python }})
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.12 — основная сборка; 3.8 — последний Python с поддержкой Windows 7 (сборка -win7)
+        python: ["3.12", "3.8.10"]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
           architecture: x64
       - name: Ruff
+        if: matrix.python == '3.12'
         run: |
           python -m pip install ruff==0.16.9
           ruff check . --output-format github
@@ -27,23 +33,33 @@ jobs:
         run: python main.py --selftest
 
   build:
-    name: Сборка exe
+    name: Сборка exe (${{ matrix.flavor }})
     needs: test
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - flavor: win10
+            python: "3.12"
+            args: ""
+          - flavor: win7
+            python: "3.8.10"
+            args: "-Win7"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
           architecture: x64
       - name: PyInstaller
         run: python -m pip install pyinstaller==6.19.0
       - name: Сборка и самопроверка собранного exe
         shell: pwsh
-        run: ./build.ps1
+        run: ./build.ps1 ${{ matrix.args }}
       - uses: actions/upload-artifact@v7
         with:
-          name: BadLink
+          name: BadLink-${{ matrix.flavor }}
           path: dist/BadLink-*.zip
           if-no-files-found: error
 
@@ -58,7 +74,8 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
-          name: BadLink
+          pattern: BadLink-*
+          merge-multiple: true
           path: dist
       - name: Тег совпадает с версией в netem/__init__.py
         shell: pwsh
@@ -69,4 +86,7 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ github.ref_name }}" (Get-ChildItem dist/BadLink-*.zip).FullName --generate-notes --title "BadLink ${{ github.ref_name }}"
+        run: |
+          $files = (Get-ChildItem dist/BadLink-*.zip).FullName
+          if ($files.Count -ne 2) { throw "Ожидалось 2 архива (win10 и win7), найдено: $($files -join ', ')" }
+          gh release create "${{ github.ref_name }}" $files --generate-notes --title "BadLink ${{ github.ref_name }}"

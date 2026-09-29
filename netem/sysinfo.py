@@ -1,6 +1,5 @@
 """Интерфейсы, права администратора, ICMP-пинг, глобальная горячая клавиша, фильтр WinDivert."""
 import ctypes
-import json
 import os
 import socket
 import struct
@@ -35,35 +34,88 @@ def relaunch_as_admin():
 
 
 # ---------------- интерфейсы ----------------
-_PS_ADAPTERS = r"""
-$ErrorActionPreference='SilentlyContinue'
-[Console]::OutputEncoding = [Text.Encoding]::UTF8
-$ips = Get-NetIPAddress | Where-Object { $_.AddressState -eq 'Preferred' }
-$res = foreach ($a in Get-NetAdapter) {
-  [pscustomobject]@{
-    idx = $a.ifIndex; name = $a.Name; desc = $a.InterfaceDescription; status = [string]$a.Status
-    speed = [string]$a.LinkSpeed
-    ips = @($ips | Where-Object { $_.InterfaceIndex -eq $a.ifIndex } | ForEach-Object { $_.IPAddress })
-  }
-}
-@($res) | ConvertTo-Json -Compress -Depth 3
-"""
+# GetAdaptersAddresses (есть с Windows XP): в отличие от Get-NetAdapter/ConvertTo-Json работает и на Windows 7.
+class _SockAddr(ctypes.Structure):
+    _fields_ = [("lpSockaddr", ctypes.c_void_p), ("iSockaddrLength", ctypes.c_int)]
+
+
+class _UnicastAddr(ctypes.Structure):
+    pass
+
+
+_UnicastAddr._fields_ = [("Length", ctypes.c_ulong), ("Flags", ctypes.c_ulong),
+                         ("Next", ctypes.POINTER(_UnicastAddr)), ("Address", _SockAddr)]
+
+
+class _AdapterAddr(ctypes.Structure):
+    pass
+
+
+_AdapterAddr._fields_ = [
+    ("Length", ctypes.c_ulong), ("IfIndex", ctypes.c_ulong), ("Next", ctypes.POINTER(_AdapterAddr)),
+    ("AdapterName", ctypes.c_char_p), ("FirstUnicastAddress", ctypes.POINTER(_UnicastAddr)),
+    ("FirstAnycastAddress", ctypes.c_void_p), ("FirstMulticastAddress", ctypes.c_void_p),
+    ("FirstDnsServerAddress", ctypes.c_void_p), ("DnsSuffix", ctypes.c_wchar_p), ("Description", ctypes.c_wchar_p),
+    ("FriendlyName", ctypes.c_wchar_p), ("PhysicalAddress", ctypes.c_ubyte * 8),
+    ("PhysicalAddressLength", ctypes.c_ulong), ("Flags", ctypes.c_ulong), ("Mtu", ctypes.c_ulong),
+    ("IfType", ctypes.c_ulong), ("OperStatus", ctypes.c_int), ("Ipv6IfIndex", ctypes.c_ulong),
+    ("ZoneIndices", ctypes.c_ulong * 16), ("FirstPrefix", ctypes.c_void_p),
+    ("TransmitLinkSpeed", ctypes.c_uint64), ("ReceiveLinkSpeed", ctypes.c_uint64),
+]
+
+_OPER_STATUS = {1: "Up", 2: "Disconnected", 6: "Not Present", 7: "Disconnected"}
+_IF_TYPE_LOOPBACK, _IF_TYPE_TUNNEL = 24, 131      # loopback и служебные туннели (isatap/teredo) не показываем
+
+
+def _fmt_speed(bps):
+    for unit, div in (("Gbps", 10 ** 9), ("Mbps", 10 ** 6), ("Kbps", 10 ** 3)):
+        if bps >= div:
+            return f"{bps / div:g} {unit}"
+    return f"{bps} bps"
+
+
+def _sockaddr_ip(sa):
+    if not sa.lpSockaddr:
+        return None
+    family = ctypes.cast(sa.lpSockaddr, ctypes.POINTER(ctypes.c_ushort))[0]
+    raw = ctypes.string_at(sa.lpSockaddr, sa.iSockaddrLength)
+    if family == socket.AF_INET:
+        return socket.inet_ntop(socket.AF_INET, raw[4:8])
+    if family == socket.AF_INET6:
+        return socket.inet_ntop(socket.AF_INET6, raw[8:24])
+    return None
 
 
 def list_interfaces():
     """[{idx, name, desc, status, speed, ips}], подключённые — сверху."""
-    try:
-        out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", _PS_ADAPTERS],
-                             capture_output=True, timeout=30, creationflags=CREATE_NO_WINDOW)
-        text = out.stdout.decode("utf-8", errors="replace").strip()
-        data = json.loads(text) if text else []
-    except Exception:
-        data = []
-    if isinstance(data, dict):
-        data = [data]
-    for a in data:
-        a["ips"] = [ip for ip in (a.get("ips") or []) if not ip.lower().startswith("fe80")]
-    data.sort(key=lambda a: (a.get("status") != "Up", a.get("name", "")))
+    iphlp = ctypes.WinDLL("iphlpapi")
+    size = ctypes.c_ulong(32 * 1024)
+    for _ in range(4):                               # буфер мог не хватить, если адаптер добавился между вызовами
+        buf = ctypes.create_string_buffer(size.value)
+        rc = iphlp.GetAdaptersAddresses(0, 0x0010, None, buf, ctypes.byref(size))   # AF_UNSPEC, SKIP_DNS_SERVER
+        if rc != 111:                                # ERROR_BUFFER_OVERFLOW
+            break
+    if rc != 0:
+        return []
+    data = []
+    p = ctypes.cast(buf, ctypes.POINTER(_AdapterAddr))
+    while p:
+        a = p.contents
+        if a.IfType not in (_IF_TYPE_LOOPBACK, _IF_TYPE_TUNNEL):
+            ips = []
+            u = a.FirstUnicastAddress
+            while u:
+                ip = _sockaddr_ip(u.contents.Address)
+                if ip and not ip.lower().startswith(("fe80", "169.254.")):   # link-local — не рабочие адреса
+                    ips.append(ip)
+                u = u.contents.Next
+            data.append(dict(idx=a.IfIndex or a.Ipv6IfIndex, name=a.FriendlyName or "", desc=a.Description or "",
+                             status=_OPER_STATUS.get(a.OperStatus, "Down"),
+                             speed=_fmt_speed(max(a.TransmitLinkSpeed, a.ReceiveLinkSpeed)
+                                              if a.TransmitLinkSpeed < 2 ** 63 else 0),
+                             ips=ips))
+        p = a.Next
+    data.sort(key=lambda a: (a["status"] != "Up", a["name"]))
     return data
 
 
