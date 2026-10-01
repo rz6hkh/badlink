@@ -10,7 +10,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from . import __version__, sysinfo
-from .chart import Chart, fmt_rate
+from .chart import MARK, SHADE, Chart, fmt_rate
 from .engine import DOWN, UP, Engine, Params
 from .iperf import IperfClient, IperfServer, parse_line
 
@@ -754,24 +754,30 @@ class App(tk.Tk):
     def _draw_charts(self, running):
         h = self.h
         shade = list(h["outage"])
+        # пункт «прерывание» — только когда на графике есть что подсвечивать
+        outage_item = [dict(text="прерывание", color=SHADE, style="shade")] if any(shade[-SPAN:]) else []
         for ch, key, color, fill in ((self.ch_down, "down", C_DOWN, C_DOWN_FILL), (self.ch_up, "up", C_UP, C_UP_FILL)):
             series = [dict(values=list(h[key + "_in"]), color=C_OFFER, style="line"),
                       dict(values=list(h[key]), color=color, fill=fill, style="area"),
                       dict(values=list(h[key + "_lim"]), color=C_LIMIT, style="dash")]
             last = h[key][-1] if h[key] else None
             lim = h[key + "_lim"][-1] if h[key + "_lim"] else None
-            legend = f"прошло {fmt_rate(last)}"
+            offer = h[key + "_in"][-1] if h[key + "_in"] else None
+            legend = [dict(text=f"прошло {fmt_rate(last)}", color=color, fill=fill, style="area")]
             if running:
-                legend += f"   лимит {fmt_rate(lim)}   ▬ серая — пришло на вход"
-            ch.set(series, shade, legend=legend)
+                legend += [dict(text=f"лимит {fmt_rate(lim)}", color=C_LIMIT, style="dash"),
+                           dict(text=f"пришло на вход {fmt_rate(offer)}", color=C_OFFER, style="line")]
+            ch.set(series, shade, legend=legend + outage_item)
         pv = [x for x in h["ping"] if x is not None]
         self.ch_ping.set([dict(values=list(h["ping"]), color=C_PING, style="line")], shade,
                          marks=list(h["ping_lost"]),
-                         legend=(f"последний {pv[-1]:.1f} мс   ▼ — потерян" if pv else "▼ — потерян"))
+                         legend=[dict(text=f"пинг {pv[-1]:.1f} мс" if pv else "пинг", color=C_PING, style="line"),
+                                 dict(text="потерян", color=MARK, style="mark")] + outage_item)
         iv = list(h["iperf"])
         lastv = next((x for x in reversed(iv) if x is not None), None)
         self.ch_iperf.set([dict(values=iv, color=C_IPERF, style="bar")], shade,
-                          legend=f"последняя секунда {fmt_rate(lastv)}" if lastv is not None else "нет теста")
+                          legend=[dict(text=f"последняя секунда {fmt_rate(lastv)}" if lastv is not None
+                                       else "нет теста", color=C_IPERF, style="bar")] + outage_item)
 
     def _update_table(self, running, rates, lim):
         def both(fn):

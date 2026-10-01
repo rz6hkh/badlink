@@ -30,7 +30,9 @@ def fmt_rate(kbps, digits=2):
 
 class Chart(tk.Canvas):
     """series: [dict(values=[...], color=str, style='area'|'line'|'dash'|'bar', name=str)]
-    values выровнены по правому краю (последняя секунда справа), None — нет данных."""
+    values выровнены по правому краю (последняя секунда справа), None — нет данных.
+    legend: [dict(text=str, color=str, style=..., fill=str)] — цветные пункты справа от заголовка;
+    style как у серий плюс 'shade' (прерывание) и 'mark' (▼); без color — просто текст."""
 
     def __init__(self, master, title, kind="rate", span=120, height=140, min_scale=None):
         super().__init__(master, height=height, bg=BG, highlightthickness=0)
@@ -41,15 +43,48 @@ class Chart(tk.Canvas):
         self.series = []
         self.shade = []
         self.marks = []
-        self.legend = ""
+        self.legend = []
         self.bind("<Configure>", lambda e: self.redraw())
 
-    def set(self, series, shade=None, marks=None, legend=""):
+    def set(self, series, shade=None, marks=None, legend=None):
         self.series = series
         self.shade = shade or []
         self.marks = marks or []
-        self.legend = legend
+        self.legend = legend or []
         self.redraw()
+
+    def _swatch(self, x, y, item):
+        """Образец линии/заливки шириной 16 px с центром по y; возвращает правый край."""
+        style, color = item.get("style", "line"), item["color"]
+        if style == "area":
+            self.create_rectangle(x, y - 4, x + 16, y + 5, fill=item.get("fill", color), width=0, tags="legend")
+            self.create_line(x, y - 4, x + 16, y - 4, fill=color, width=1.5, tags="legend")
+        elif style in ("bar", "shade"):
+            self.create_rectangle(x + 2, y - 4, x + 14, y + 5, fill=color, width=0, tags="legend")
+        elif style == "mark":
+            self.create_polygon(x + 5, y - 3, x + 11, y - 3, x + 8, y + 3, fill=color, outline="", tags="legend")
+        else:
+            self.create_line(x, y, x + 16, y, fill=color, width=1.5 if style == "line" else 1,
+                             dash=(4, 3) if style == "dash" else None, tags="legend")
+        return x + 16
+
+    def _draw_legend(self, left, right, y):
+        """Пункты слева направо, прижатые к right; лишние с конца отбрасываются, если не влезают."""
+        items = list(self.legend)
+        while items:
+            self.delete("legend")
+            x = 0
+            for it in items:
+                if it.get("color"):
+                    x = self._swatch(x, y, it) + 4
+                t = self.create_text(x, y, text=it["text"], anchor="w", fill=TEXT, font=("Segoe UI", 8),
+                                     tags="legend")
+                x = self.bbox(t)[2] + 12
+            width = x - 12
+            if right - width >= left or len(items) == 1:
+                self.move("legend", right - width, 0)
+                return
+            items.pop()
 
     def _ylabel(self, v, top):
         if self.kind == "ms":
@@ -147,5 +182,5 @@ class Chart(tk.Canvas):
                 x = X(i, n)
                 self.create_polygon(x - 3, T + 1, x + 3, T + 1, x, T + 7, fill=MARK, outline="")
 
-        self.create_text(L, 3, text=self.title, anchor="nw", fill=TITLE, font=("Segoe UI", 9, "bold"))
-        self.create_text(W - R, 3, text=self.legend, anchor="ne", fill=TEXT, font=("Segoe UI", 8))
+        t = self.create_text(L, 3, text=self.title, anchor="nw", fill=TITLE, font=("Segoe UI", 9, "bold"))
+        self._draw_legend(self.bbox(t)[2] + 16, W - R, 10)
